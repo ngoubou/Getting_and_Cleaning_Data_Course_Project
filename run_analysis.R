@@ -2,11 +2,11 @@
 
 # 1st PART : DATA PREPARATION
 
-# We start by downloading the data we need for the analysis, 
-# then we select only the files that we will need 
+# We start by downloading and reading the data we need for the analysis, 
+
 
 # load the necessary library
-library(data.table)
+library(tidyverse)
 
 # download the file
 if (!file.exists("data")){
@@ -15,77 +15,104 @@ if (!file.exists("data")){
 url <- "https://d396qusza40orc.cloudfront.net/getdata%2Fprojectfiles%2FUCI%20HAR%20Dataset.zip"
 download.file( url, destfile = ".//data//data.zip" )
 dateDownloaded <- date()
-unzip("data.zip")
+unzip(".//data//data.zip", exdir = ".//data") #using the name of the file & not the pathname will throw an error
 
 # check if the file has been downloaded
 list.files(".//data")
 
-# The following files will be used for the analysis
-# test/subject_test.txt  , test/X_test.txt  , test/y_test.txt
-# train/subject_train.txt, train/X_train.txt, train/y_train.txt
-# We will not use the file Inertial Signals
 
-trainfile <- list.files("train", full.names = TRUE)[-1]
-testfile  <- list.files("test" , full.names = TRUE)[-1]
+# read the training data
+trainingSubjects <- read.table(file.path(dataPath, "train", "subject_train.txt"))
+trainingValues <- read.table(file.path(dataPath, "train", "X_train.txt"))
+trainingActivity <- read.table(file.path(dataPath, "train", "y_train.txt"))
 
-# Read in all six files
-file <- c(trainfile, testfile)
-data <- lapply(file, read.table, stringsAsFactors = FALSE, header = FALSE)
+# read the test data
+testSubjects <- read.table(file.path(dataPath, "test", "subject_test.txt"))
+testValues <- read.table(file.path(dataPath, "test", "X_test.txt"))
+testActivity <- read.table(file.path(dataPath, "test", "y_test.txt"))
+
+# read features, don't convert text labels to factors
+features <- read.table(file.path(dataPath, "features.txt"), as.is = TRUE)
+## note: feature names (in features[, 2]) are not unique
+##       e.g. fBodyAcc-bandsEnergy()-1,8
+
+# read activity labels
+activities <- read.table(file.path(dataPath, "activity_labels.txt"))
+colnames(activities) <- c("activityId", "activityLabel")
+
+
 
 
 # 2nd PART : DATA ANALYSIS
 # ---------------------------------------------------------------------
-# Step 1 : We merge the training and the test sets to create one data set
-# rbind the train and test data by each variable
-data1 <- mapply(rbind, data[ c(1:3) ], data[ c(4:6) ])
+# concatenate individual data tables to make single data table
+humanActivity <- rbind(
+  cbind(trainingSubjects, trainingValues, trainingActivity),
+  cbind(testSubjects, testValues, testActivity)
+)
 
-# data2: the whole single dataset
-# column 1 = subject, column 2~562 = feature,  column 563 = activity
-data2 <- do.call( cbind, data1 )
+# remove individual data tables to save memory
+rm(trainingSubjects, trainingValues, trainingActivity, 
+   testSubjects, testValues, testActivity)
+
+# assign column names
+colnames(humanActivity) <- c("subject", features[, 2], "activity")
 
 
 # ----------------------------------------------------------------------
 # Step 2 : For the feature column, extracts only the measurements on the 
 # mean and standard deviation for each measurement
 
-# match it using features.txt(second file in list.file())
-# featurename is in the second column(V2)
-featurenames <- fread( list.files()[2], header = FALSE, stringsAsFactor = FALSE )
+# determine columns of data set to keep based on column name...
+columnsToKeep <- grepl("subject|activity|mean|std", colnames(humanActivity))
 
-# set the column names for data2, does the task required in 
+# ... and keep data in these columns only
+humanActivity <- humanActivity[, columnsToKeep]
 
 
 # ------------------------------------------------------------------------------
 # Step 3 : Use descriptive activity names to name the activities in the data set
 
-# match it using activity_labels.txt(first file in list.file() )
-activitynames <- fread( list.files()[1], header = FALSE, stringsAsFactor = FALSE )
-
-data3$activity <- activitynames$V2[ match( data3$activity, activitynames$V1 ) ]
+# replace activity values with named factor levels
+humanActivity$activity <- factor(humanActivity$activity, 
+                                 levels = activities[, 1], labels = activities[, 2])
 
 
 # ------------------------------------------------------------------------------
 # Step 4 : Appropriately labels the data set with descriptive variable names.
-setnames( data2, c(1:563), c( "subject", featurenames$V2, "activity" ) )
 
-# Extract only the column that have mean() or std() in the end
-# Add 1 to it, cuz the first column in data2 is subject not feature
-# Don't just use mean when doing matching, this will include meanFreq()
-# Each backslash must be expressed as \\
-measurements <- grep( "std|mean\\(\\)", featurenames$V2) + 1
+# get column names
+humanActivityCols <- colnames(humanActivity)
 
-# data3 : contains only the mean and standard deviation for feature column 
-data3 <- data2[, c( 1, measurements, 563 ) ]
+# remove special characters
+humanActivityCols <- gsub("[\\(\\)-]", "", humanActivityCols)
+
+# expand abbreviations and clean up names
+humanActivityCols <- gsub("^f", "frequencyDomain", humanActivityCols)
+humanActivityCols <- gsub("^t", "timeDomain", humanActivityCols)
+humanActivityCols <- gsub("Acc", "Accelerometer", humanActivityCols)
+humanActivityCols <- gsub("Gyro", "Gyroscope", humanActivityCols)
+humanActivityCols <- gsub("Mag", "Magnitude", humanActivityCols)
+humanActivityCols <- gsub("Freq", "Frequency", humanActivityCols)
+humanActivityCols <- gsub("mean", "Mean", humanActivityCols)
+humanActivityCols <- gsub("std", "StandardDeviation", humanActivityCols)
+
+# correct typo
+humanActivityCols <- gsub("BodyBody", "Body", humanActivityCols)
+
+# use new labels as column names
+colnames(humanActivity) <- humanActivityCols
 
 
 # ---------------------------------------------------------------------------------
 # Step 5 : From the data set in step 4, creates a second, independent tidy data set, 
 # with the average of each variable for each activity and each subject.
-data4 <- aggregate(. ~ subject + activity, data = data3, FUN = mean)
 
-# write out data4
+# group by subject and activity and summarise using mean
+humanActivityMeans <- humanActivity %>% 
+  group_by(subject, activity) %>%
+  summarise_each(funs(mean))
 
-write.table(data4, "average_data.txt", row.names = FALSE)
-
-
-
+# output to file "tidy_data.txt"
+write.table(humanActivityMeans, "tidy_data.txt", row.names = FALSE, 
+            quote = FALSE)
